@@ -14,7 +14,7 @@ import os
 
 class config:
 
-    def __init__(self, url, file_absolute=None  ):
+    def __init__(self, url, file_absolute=None, use_default=True):
         # Keep the FULL url for requests, but extract the path for the filename
         self.url = url 
         parsed_path = urlparse(url).path
@@ -29,29 +29,40 @@ class config:
 
         # Setup paths
         self.path_default = Path(self.caller_script_dir()) / 'data'
-        self.make_dir(self.path_default)
-        self.file_absolute = None
-        
-
-    def procedure(self, file_absolute=None):
-        rich.print("[bold magenta]Welcome to the wikipedia cloning and data science tool.[/bold magenta]")
-        is_local = Confirm.ask("Do you already have the data downloaded?")
-        if is_local:
-            rich.print(f'Check the opened window to select the data file ending in "{self.url_extensions}"')
-            self.get_file_path()
+        self.default_file = Path(os.path.join(self.path_default, self.url_filename))
+        self.use_default = use_default
+        if self.use_default == True:
+            self.file_absolute = self.default_file
         else:
-            is_download = Confirm.ask("Would you like to download the data now?")
-            if is_download:
-                msg = '[yellow]The data is about 25GB and could take a long time to download.[/yellow]\n'
-                # msg += 'Run this program again after finishing the download from...\n'
-                msg += 'Downloading data from...\n'
-                msg += f'{self.url}\n'
-                rich.print(msg)
-                self.download_file()
-            else:
-                rich.print('[green]Exiting app.[/green]')
+            self.file_absolute = file_absolute
+
+    def procedure(self):
+        condition = (self.use_default, self.default_file.exists())
+        match condition:
+            # do nothing but report filepath: if using default, values already set in __inti__
+            case (True, True):
+                rich.print(f'You selected...\n{self.default_file}')
+                return
+            # user needs to make a choice
+            case _:
+                rich.print("[bold magenta]Welcome to the wikipedia cloning and data science tool.[/bold magenta]")
+                is_local = Confirm.ask("Do you already have the data downloaded?")
+                if is_local:
+                    self.get_file_path()
+                else:
+                    is_download = Confirm.ask("Would you like to download the data now?")
+                    if is_download:
+                        msg = '[yellow]The data is about 25GB and could take a long time to download.[/yellow]\n'
+                        # msg += 'Run this program again after finishing the download from...\n'
+                        msg += 'Downloading data from...\n'
+                        msg += f'{self.url}\n'
+                        rich.print(msg)
+                        self.download_file()
+                    else:
+                        rich.print('[green]Exiting app.[/green]')
 
     def get_file_path(self):
+        rich.print(f'Check the opened window to select the data file ending in "{self.url_extensions}"')
         # 1. Create a hidden root window (prevents a blank box from staying open)
         root = tk.Tk()
         root.withdraw()
@@ -61,7 +72,7 @@ class config:
         file_path = filedialog.askopenfilename(
             title="Select your Data File",
             filetypes=[('Compressed XML', '*.xml.bz2'),
-                       ("All files", "*.*")]
+                    ("All files", "*.*")]
         )
         if not file_path:
             rich.print("[red]File selection cancelled.[/red]")
@@ -71,12 +82,10 @@ class config:
         self.file_absolute = file_path
         rich.print(f'You selected...\n{self.file_absolute}')
 
-    def download_file(self, file_absolute=None):
+    def download_file(self):
         # Determine where to save
-        if file_absolute is None:
+        if self.file_absolute is None:
             self.file_absolute = self.get_save_location()
-        else:
-            self.file_absolute = file_absolute
         
         # If user cancelled the file dialog
         if not self.file_absolute:
@@ -114,6 +123,9 @@ class config:
             rich.print(f"[bold red]Error:[/bold red] {e}")
     
     def get_save_location(self):
+        # make dir for the default path incase it is used
+        self.make_dir(self.path_default)
+
         root = tk.Tk()
         root.withdraw()
         root.attributes('-topmost', True) # Keep it on top
