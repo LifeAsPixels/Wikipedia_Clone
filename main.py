@@ -8,9 +8,12 @@ def main():
     # configuration.download_file()
 
     eda = wiki_explorer.WikiExplorer(configuration)
-    eda.peek(only_articles=True,
-             exclude_redirects=True,
-             trunc_size=1000)
-
+    if eda.file_absolute is not None:
+        # eda.peek(only_articles=True,
+        #         exclude_redirects=True,
+        #         trunc_size=1000,
+        #         )
+        eda.process_and_report(limit=10)
+        eda.save_to_csv(output_filename="wiki_edges.csv", limit=10)
 if __name__ == "__main__":
     main()

@@ -1,6 +1,9 @@
+from rich import print_json
 import bz2
 import xml.etree.ElementTree as ET
-from rich import print_json
+import re
+import csv
+from pathlib import Path
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from config import config
@@ -9,7 +12,10 @@ class WikiExplorer:
     def __init__(self, config: 'config'):
         self.config = config
         self.file_absolute = self.config.file_absolute
-
+        self.link_pattern = re.compile(r"\[\[([^|:\]]+)(?:\|[^\]]+)?\]\]")
+        # Add a blacklist for common non-topical links
+        self.blacklist = {"Main Page", "Portal:Contents", "Portal:Featured content"}
+        
     def peek(self, limit=1, only_articles=True, exclude_redirects=True, trunc_size=300):
         """
         Explores the Wikipedia dump with toggleable filters.
@@ -85,3 +91,106 @@ class WikiExplorer:
                 text = child.text if child.text else ""
                 data[tag_name][child_tag] = text[:trunc_size] + "..." if len(text) > trunc_size else text
         return data
+    
+    def _clean_links(self, links, current_title):
+        """Filters out administrative links and self-references."""
+        clean = []
+        for link in links:
+            # 1. Remove links with colons (Namespaces like Category:, Template:, etc.)
+            if ":" in link:
+                continue
+            # 2. Remove self-references
+            if link == current_title:
+                continue
+            # 3. Remove blacklisted items
+            if link in self.blacklist:
+                continue
+            
+            clean.append(link)
+        return clean
+    
+    def get_page_links(self, limit=100):
+        count = 0
+        with bz2.BZ2File(self.file_absolute, "rb") as f:
+            context = ET.iterparse(f, events=("end",))
+            
+            for event, elem in context:
+                tag = elem.tag.split('}')[-1]
+                
+                if tag == "page":
+                    ns_elem = elem.find(".//{*}ns")
+                    ns = ns_elem.text if ns_elem is not None else "Unknown"
+                    is_redirect = elem.find(".//{*}redirect") is not None
+                    
+                    if ns == "0" and not is_redirect:
+                        title = elem.find(".//{*}title").text
+                        text_elem = elem.find(".//{*}text")
+                        
+                        if text_elem is not None and text_elem.text:
+                            raw_links = self.link_pattern.findall(text_elem.text)
+                            # Apply the cleaning method
+                            clean_links = self._clean_links(list(set(raw_links)), title)
+                            
+                            yield {
+                                "source": title,
+                                "targets": clean_links,
+                                "out_count": len(clean_links)
+                            }
+                            count += 1
+
+                    elem.clear()
+                    if count >= limit:
+                        break
+
+    def process_and_report(self, limit=100):
+        """Run with a higher limit to see the cleaned data."""
+        for page_data in self.get_page_links(limit=limit):
+            if page_data['out_count'] > 0:
+                print(f"Page: {page_data['source']} | Clean Links: {page_data['out_count']}")
+                print(f"Sample: {page_data['targets'][:3]}")
+                print("-" * 20)
+
+    def save_to_csv(self, output_filename="wiki_edges.csv", limit=1000):
+        """
+        Extracts links and saves them as an Edge List (Source, Target).
+        """
+        output_path = Path(self.config.path_default) / output_filename
+        
+        print(f"Starting extraction... Saving to: {output_path}")
+        
+        with open(output_path, mode='w', newline='', encoding='utf-8') as csv_file:
+            writer = csv.writer(csv_file)
+            # Write header
+            writer.writerow(['source', 'target'])
+            
+            count = 0
+            # Reuse the extraction logic (you can refactor this into a generator)
+            with bz2.BZ2File(self.file_absolute, "rb") as f:
+                context = ET.iterparse(f, events=("end",))
+                for event, elem in context:
+                    tag = elem.tag.split('}')[-1]
+                    if tag == "page":
+                        ns = elem.find(".//{*}ns").text
+                        is_redirect = elem.find(".//{*}redirect") is not None
+                        
+                        if ns == "0" and not is_redirect:
+                            title = elem.find(".//{*}title").text
+                            text_elem = elem.find(".//{*}text")
+                            
+                            if text_elem is not None and text_elem.text:
+                                raw_links = self.link_pattern.findall(text_elem.text)
+                                clean_links = self._clean_links(list(set(raw_links)), title)
+                                
+                                # Write each connection as a new row
+                                for target in clean_links:
+                                    writer.writerow([title, target])
+                                
+                                count += 1
+                                if count % 100 == 0:
+                                    print(f"Processed {count} pages...")
+
+                        elem.clear()
+                        if count >= limit:
+                            break
+                            
+        print(f"Finished! Saved {count} pages of relationships to {output_filename}")
